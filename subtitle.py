@@ -232,7 +232,7 @@ def whisper_subtitle(uploaded_file, source_language):
 
     # 3. Transcribe
     detected_language = source_language
-    if source_language == "Automatic":
+    if source_language == "Auto":
         segments, info = model.transcribe(audio_file_path, word_timestamps=True)
         detected_lang_code = info.language
         detected_language = get_language_name(detected_lang_code)
@@ -576,7 +576,7 @@ def subtitle_maker(media_file, source_lang, target_lang):
     
     return (
         default_srt, translated_srt_path, custom_srt, word_srt,
-        shorts_srt, txt_path,sentence_json,word_json, transcript
+        shorts_srt, txt_path,sentence_json,word_json, transcript,detected_lang
     )
 
 
