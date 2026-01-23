@@ -192,7 +192,7 @@ def get_tts_file_name(text, language="en"):
 # ==================================================
 
 def text_chunk(text, lang_code="en", char_limit=280):
-    text = clean_text(text)
+    # text = clean_text(text) #because Qwen3-TTS can handle that
 
     # 🔒 Atomic quote protection
     text = protect_short_quotes(text, char_limit)
