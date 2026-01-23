@@ -1,0 +1,5 @@
+faster-whisper==1.1.1
+ctranslate2==4.5.0
+pysrt
+sentencex
+qwen-tts
