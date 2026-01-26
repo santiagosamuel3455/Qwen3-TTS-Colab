@@ -11,7 +11,21 @@
 
 
 ## Installation
+In short for me 
+```
+git clone https://github.com/NeuralFalconYT/Qwen3-TTS-Colab.git
+cd Qwen3-TTS-Colab
+python -m venv venv
+venv\Scripts\activate
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install -r requirements.txt
+pip install ctranslate2==3.24.0 #for my cuda 11.8 
+python app.py 
 
+#For new run make sure your are inside this folder Qwen3-TTS-Colab
+venv\Scripts\activate
+python app.py 
+```
 ### Prerequisites
 
 * **[Python 3.10](https://www.python.org/downloads/release/python-3100/) [YT Tutorial](https://www.youtube.com/watch?v=P7Q4_pqj7uc) or newer**
