@@ -527,8 +527,8 @@ import click
 @click.option("--share", is_flag=True, default=False, help="Enable sharing of the interface.")
 def main(share,debug):
     demo = build_ui()
-    demo.launch(share=True, debug=True)
-    demo.queue().launch(debug=debug, share=share)
+    # demo.launch(share=True, debug=True)
+    demo.queue().launch(share=share,debug=debug)
 
 if __name__ == "__main__":
     main()    
