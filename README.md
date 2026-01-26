@@ -19,12 +19,16 @@ python -m venv venv
 venv\Scripts\activate
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
 pip install -r requirements.txt
-pip install ctranslate2==3.24.0 #for my cuda 11.8 
+#for my cuda 11.8 
+pip uninstall -y ctranslate2
+pip install ctranslate2==3.24.0 
 python app.py 
 
 #For new run make sure your are inside this folder Qwen3-TTS-Colab
 venv\Scripts\activate
-python app.py 
+python app.py
+
+# For Potato Laptop Users Use only the 0.6B model, Avoid 1.7B models, Disable Subtitle Generation
 ```
 ### Prerequisites
 
