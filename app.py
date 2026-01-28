@@ -13,6 +13,7 @@ from pydub.silence import split_on_silence
 from huggingface_hub import snapshot_download
 from hf_downloader import download_model
 import gc 
+import random 
 from huggingface_hub import login
 
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -25,13 +26,91 @@ else:
 loaded_models = {}
 MODEL_SIZES = ["0.6B", "1.7B"]
 
-# Speaker and language choices
+# --- CONSTANTES Y LISTAS DE OPCIONES ---
+
 SPEAKERS = [
     "Aiden", "Dylan", "Eric", "Ono_anna", "Ryan", "Serena", "Sohee", "Uncle_fu", "Vivian"
 ]
 LANGUAGES = ["Auto", "Chinese", "English", "Japanese", "Korean", "French", "German", "Spanish", "Portuguese", "Russian"]
 
+# Listas para el Constructor de Prompts
+GENDER_OPTIONS = ["None", "Female", "Male"]
+
+AGE_OPTIONS = [
+    "None", "Child", "Teenager", "Young Adult", "Adult", 
+    "Middle-aged", "Elderly", "Old"
+]
+
+# --- DICCIONARIO MAESTRO DE EMOCIONES Y ESTILOS ---
+EMOTION_MAP = {
+    "None": "",
+    
+    # --- BASIC EMOTIONS ---
+    "Happy": "Speaking with a cheerful and upbeat tone, smiling voice",
+    "Sad": "Speaking with a sorrowful and downcast tone, heavy with emotion",
+    "Angry": "Speaking with a furious and aggressive tone, sharp and intense",
+    "Excited": "Speaking with an enthusiastic and high-energy tone, fast-paced",
+    "Whispering": "Speaking in a hushed and soft whisper, barely audible",
+    "Shouting": "Speaking with a very loud and booming voice, projecting force",
+    "Terrified": "Speaking with a trembling and fearful tone, full of panic",
+    "Crying": "Speaking with a tearful and broken voice, sobbing intermittently",
+    "Laughing": "Speaking while chuckling, with a joyful and amused tone",
+    "Serious": "Speaking with a grave and solemn tone, strictly business",
+    "Sarcastic": "Speaking with a mocking and cynical tone, emphasizing irony",
+    "Sleepy": "Speaking with a drowsy and slow tone, yawning occasionally",
+    "Drunk": "Speaking with a slurred and unsteady voice, disoriented",
+    "Robotic": "Speaking with a mechanical and flat tone, lacking human emotion",
+    "Professional": "Speaking with a polished and formal tone, clear and articulate",
+    "Flirty": "Speaking with a playful and charming tone, slightly breathy",
+    "Disgusted": "Speaking with a repulsed and scornful tone, curling the lip",
+    "Surprised": "Speaking with a shocked and amazed tone, rising pitch",
+    "Nervous": "Speaking with a shaky and hesitant tone, stuttering slightly",
+    "Confident": "Speaking with a bold and assured tone, strong and steady",
+    "Monotone": "Speaking with a flat and unvaried pitch, boring and dull",
+    "Melancholic": "Speaking with a deep and wistful sadness, slow and reflective",
+    "Energetic": "Speaking with a lively and dynamic tone, full of vigor",
+    "Calm": "Speaking with a peaceful and soothing tone, relaxed and steady",
+    "Mysterious (Basic)": "Speaking with an enigmatic and secretive tone",
+    "Panic": "Speaking with a frantic and breathless tone, high urgency",
+    "Seductive": "Speaking with a smooth and alluring tone, low and captivating",
+    "Warm": "Speaking with a friendly and inviting tone, kind and gentle",
+
+    # --- NARRATOR STYLES ---
+    "Epic Narrator": "Deep and resonant voice, slow-paced rhythm for grandiose moments",
+    "Intimate Narrator": "Close and whispered tone, as if sharing a secret",
+    "Mysterious Narrator": "Low intonation with strategic pauses that generate intrigue",
+    "Documentary Narrator": "Neutral, clear, and authoritative voice that conveys credibility",
+    "Nostalgic Narrator": "Soft tone with slight melancholy that evokes memories of the past",
+    "Energetic Narrator": "Vibrant voice and accelerated rhythm that generates enthusiasm",
+    "Trustworthy Narrator": "Warm and stable tone that inspires security and trust",
+    "Premium Narrator": "Refined and slow-paced voice that suggests luxury and exclusivity",
+    "Conversational Narrator": "Relaxed and natural style, like a recommendation between friends",
+    "Motivational Narrator": "Ascending intonation that conveys inspiration and calls to action",
+    "Playful Narrator": "Animated voice with pitch changes and exaggerated expressiveness",
+    "Gentle Narrator": "Soft and warm tone that generates comfort and affection",
+    "Comic Narrator": "Agile rhythm with funny emphasis that invites laughter",
+    "Protective Narrator": "Enveloping and calm voice that conveys safety",
+    "Whimsical Narrator": "Magical and light intonation, like in a fantasy tale",
+    "ASMR Narrator": "Soft and precise whispers designed for sensory relaxation",
+    "News Anchor Narrator": "Impeccable diction, neutral and objective tone",
+    "Audioguide Narrator": "Clear and moderate voice, easy to follow for long periods",
+    "Meditative Narrator": "Slow rhythm with prolonged pauses that induces deep calm",
+    "Ironic Narrator": "Subtly sarcastic tone with controlled double meaning"
+}
+
 # --- Helper Functions ---
+
+def set_seed(seed):
+    """Sets the seed for reproducibility. Returns the seed used."""
+    if seed == -1 or seed is None:
+        seed = random.randint(0, 2**32 - 1)
+    
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    return seed
 
 def get_model_path(model_type: str, model_size: str) -> str:
     """Get model path based on type and size."""
@@ -61,7 +140,7 @@ def get_model(model_type: str, model_size: str):
     key = (model_type, model_size)
     if key in loaded_models:
         return loaded_models[key]
-    
+     
     clear_other_models(keep_key=key)
     model_path = get_model_path(model_type, model_size)
     model = Qwen3TTSModel.from_pretrained(
@@ -123,7 +202,7 @@ def transcribe_reference(audio_path, mode_input, language="English"):
     elif isinstance(mode_input, str) and "High-Quality" in mode_input: should_run = True
 
     if not audio_path or not should_run: return gr.update()
-    
+     
     print(f"Starting transcription for: {audio_path}")
     src_lang = language if language != "Auto" else "English"
     try:
@@ -160,7 +239,7 @@ def process_audio_output(audio_path, make_subtitle, remove_silence, language="Au
     final_audio_path = audio_path
     if remove_silence:
         final_audio_path = remove_silence_function(audio_path)
-    
+     
     # 2. Generate Subtitles
     default_srt, custom_srt, word_srt, shorts_srt = None, None, None, None
     if make_subtitle:
@@ -185,7 +264,7 @@ def stitch_chunk_files(chunk_files,output_filename):
         return None
 
     combined_audio = AudioSegment.empty()
-    
+     
     print(f"Stitching {len(chunk_files)} audio files...")
     for f in chunk_files:
         try:
@@ -196,7 +275,7 @@ def stitch_chunk_files(chunk_files,output_filename):
 
     # output_filename = f"final_output_{os.getpid()}.wav"
     combined_audio.export(output_filename, format="wav")
-    
+     
     # Clean up temp files
     for f in chunk_files:
         try:
@@ -204,56 +283,122 @@ def stitch_chunk_files(chunk_files,output_filename):
                 os.remove(f)
         except Exception as e:
             print(f"Warning: Could not delete temp file {f}: {e}")
-            
+             
     return output_filename
 
 # --- Generators (Memory Optimized) ---
 
-def generate_voice_design(text, language, voice_description, remove_silence, make_subs):
+def generate_voice_design(text, language, gender, age, emotion_key, manual_desc, seed, remove_silence, make_subs):
+    """Generates voice using specific format: Voice: X, Gender: Y, Age: Z"""
     if not text or not text.strip(): return None, "Error: Text is required.", None, None, None, None
     
+    # Set Seed
+    actual_seed = set_seed(int(seed))
+
+    # --- Prompt Construction ---
+    prompt_parts = []
+    
+    # 1. Voice: [Name] [Description]
+    if emotion_key and emotion_key != "None":
+        narrator_desc = EMOTION_MAP.get(emotion_key, "")
+        prompt_parts.append(f"Voice: {emotion_key} {narrator_desc}")
+
+    # 2. Gender: [Value]
+    if gender and gender != "None":
+        prompt_parts.append(f"Gender: {gender}")
+
+    # 3. Age: [Value]
+    if age and age != "None":
+        prompt_parts.append(f"Age: {age}")
+
+    # Join with ", "
+    auto_prompt = ", ".join(prompt_parts)
+    
+    # 4. Combine with Manual Description
+    full_prompt = ""
+    if auto_prompt and manual_desc and manual_desc.strip():
+        full_prompt = f"{auto_prompt}. {manual_desc}"
+    elif auto_prompt:
+        full_prompt = f"{auto_prompt}."
+    elif manual_desc:
+        full_prompt = manual_desc
+    else:
+         return None, "Error: Please select options or enter a description.", None, None, None, None
+
+    print(f"Generated Prompt: {full_prompt} | Seed: {actual_seed}")
+
     try:
-        # 1. Chunk Text
+        # Chunking
         text_chunks, tts_filename = text_chunk(text, language, char_limit=280)
         print(f"Processing {len(text_chunks)} chunks...")
         
         chunk_files = []
         tts = get_model("VoiceDesign", "1.7B")
 
-        # 2. Generate & Save Loop
+        # Generate Loop
         for i, chunk in enumerate(text_chunks):
             wavs, sr = tts.generate_voice_design(
                 text=chunk.strip(),
                 language=language,
-                instruct=voice_description.strip(),
+                instruct=full_prompt.strip(),
                 non_streaming_mode=True,
                 max_new_tokens=2048,
             )
             
-            # Save immediately to disk
+            # Save to disk
             temp_filename = f"temp_chunk_{i}_{os.getpid()}.wav"
             sf.write(temp_filename, wavs[0], sr)
             chunk_files.append(temp_filename)
             
-            # Clear memory
             del wavs
             torch.cuda.empty_cache()
             gc.collect()
         
-        # 3. Stitch from disk
+        # Stitch
         stitched_file = stitch_chunk_files(chunk_files,tts_filename)
         
-        # 4. Post-Process
+        # Post-Process
         final_audio, srt1, srt2, srt3, srt4 = process_audio_output(stitched_file, make_subs, remove_silence, language)
         
-        return final_audio, "Generation Success!", srt1, srt2, srt3, srt4
+        return final_audio, f"Success! Seed: {actual_seed}", srt1, srt2, srt3, srt4
 
     except Exception as e:
         return None, f"Error: {e}", None, None, None, None
 
-def generate_custom_voice(text, language, speaker, instruct, model_size, remove_silence, make_subs):
+def generate_custom_voice(text, language, speaker, emotion_key, manual_desc, seed, model_size, remove_silence, make_subs):
+    """
+    Generates custom voice using speaker ID + Title + Description.
+    """
     if not text or not text.strip(): return None, "Error: Text is required.", None, None, None, None
     
+    # Set Seed
+    actual_seed = set_seed(int(seed))
+    
+    # --- Prompt Construction (Instruct) ---
+    prompt_parts = []
+    
+    # 1. Voice: [Name] [Description]
+    if emotion_key and emotion_key != "None":
+        narrator_desc = EMOTION_MAP.get(emotion_key, "")
+        prompt_parts.append(f"Voice: {emotion_key} {narrator_desc}")
+
+    # Join
+    auto_prompt = ", ".join(prompt_parts)
+    
+    # 3. Combine with Manual
+    full_instruct = ""
+    if auto_prompt and manual_desc and manual_desc.strip():
+        full_instruct = f"{auto_prompt}. {manual_desc}"
+    elif auto_prompt:
+        full_instruct = f"{auto_prompt}."
+    elif manual_desc:
+        full_instruct = manual_desc
+    
+    # If empty, use None so the model defaults to the speaker's style
+    final_instruct = full_instruct.strip() if full_instruct else None
+    
+    print(f"Custom Voice Instruct: {final_instruct} | Seed: {actual_seed}") 
+
     try:
         text_chunks, tts_filename = text_chunk(text, language, char_limit=280)
         chunk_files = []
@@ -265,30 +410,32 @@ def generate_custom_voice(text, language, speaker, instruct, model_size, remove_
                 text=chunk.strip(),
                 language=language,
                 speaker=formatted_speaker,
-                instruct=instruct.strip() if instruct else None,
+                instruct=final_instruct, 
                 non_streaming_mode=True,
                 max_new_tokens=2048,
             )
-            # Save immediately
+            # Save to disk
             temp_filename = f"temp_custom_{i}_{os.getpid()}.wav"
             sf.write(temp_filename, wavs[0], sr)
             chunk_files.append(temp_filename)
-            
-            # Clear memory
+             
             del wavs
             torch.cuda.empty_cache()
             gc.collect()
-            
+             
         stitched_file = stitch_chunk_files(chunk_files,tts_filename)
         final_audio, srt1, srt2, srt3, srt4 = process_audio_output(stitched_file, make_subs, remove_silence, language)
-        return final_audio, "Generation Success!", srt1, srt2, srt3, srt4
+        return final_audio, f"Success! Speaker: {speaker} | Seed: {actual_seed}", srt1, srt2, srt3, srt4
 
     except Exception as e:
         return None, f"Error: {e}", None, None, None, None
 
-def smart_generate_clone(ref_audio, ref_text, target_text, language, mode, model_size, remove_silence, make_subs):
+def smart_generate_clone(ref_audio, ref_text, target_text, language, mode, seed, model_size, remove_silence, make_subs):
     if not target_text or not target_text.strip(): return None, "Error: Target text is required.", None, None, None, None
     if not ref_audio: return None, "Error: Ref audio required.", None, None, None, None
+
+    # Set Seed
+    actual_seed = set_seed(int(seed))
 
     # 1. Mode & Transcript Logic
     use_xvector_only = ("Fast" in mode)
@@ -301,7 +448,7 @@ def smart_generate_clone(ref_audio, ref_text, target_text, language, mode, model
             try:
                 final_ref_text = transcribe_reference(ref_audio, True, language)
                 if not final_ref_text or "Error" in final_ref_text:
-                     return None, f"Transcription failed: {final_ref_text}", None, None, None, None
+                      return None, f"Transcription failed: {final_ref_text}", None, None, None, None
             except Exception as e:
                 return None, f"Transcribe Error: {e}", None, None, None, None
     else:
@@ -323,12 +470,11 @@ def smart_generate_clone(ref_audio, ref_text, target_text, language, mode, model
                 x_vector_only_mode=use_xvector_only,
                 max_new_tokens=2048,
             )
-            # Save immediately
+            # Save to disk
             temp_filename = f"temp_clone_{i}_{os.getpid()}.wav"
             sf.write(temp_filename, wavs[0], sr)
             chunk_files.append(temp_filename)
 
-            # Clear memory
             del wavs
             torch.cuda.empty_cache()
             gc.collect()
@@ -336,7 +482,7 @@ def smart_generate_clone(ref_audio, ref_text, target_text, language, mode, model
         # 4. Stitch & Process
         stitched_file = stitch_chunk_files(chunk_files,tts_filename)
         final_audio, srt1, srt2, srt3, srt4 = process_audio_output(stitched_file, make_subs, remove_silence, language)
-        return final_audio, f"Success! Mode: {mode}", srt1, srt2, srt3, srt4
+        return final_audio, f"Success! Seed: {actual_seed}", srt1, srt2, srt3, srt4
 
     except Exception as e:
         return None, f"Error: {e}", None, None, None, None
@@ -366,11 +512,25 @@ def build_ui():
                         design_text = gr.Textbox(label="Text to Synthesize", lines=4, value="It's in the top drawer... wait, it's empty? No way, that's impossible! I'm sure I put it there!",
                                                  placeholder="Enter the text you want to convert to speech...")
                         design_language = gr.Dropdown(label="Language", choices=LANGUAGES, value="Auto")
-                        design_instruct = gr.Textbox(label="Voice Description", lines=3,  placeholder="Describe the voice characteristics you want...",
-                            value="Speak in an incredulous tone, but with a hint of panic beginning to creep into your voice.")
-                        design_btn = gr.Button("Generate with Custom Voice", variant="primary")
+                        
+                        # --- SECTOR BUILDER: Voice Design ---
+                        gr.Markdown("### Voice Characteristics (Optional Builder)")
+                        with gr.Row():
+                            design_gender = gr.Dropdown(label="Gender", choices=GENDER_OPTIONS, value="None")
+                            design_age = gr.Dropdown(label="Age", choices=AGE_OPTIONS, value="None")
+                        
+                        # Usamos las claves del diccionario EMOTION_MAP
+                        design_emotion = gr.Dropdown(label="Narrator Style / Emotion", choices=list(EMOTION_MAP.keys()), value="None")
+                        
+                        design_instruct = gr.Textbox(label="Additional Description (Manual)", lines=2, 
+                                                     placeholder="Add specific details (e.g., 'breathing heavily', 'slight accent') or leave empty to use the dropdowns above.",
+                                                     value="")
+                        # ------------------------------------
+
+                        design_btn = gr.Button("Generate with Voice Design", variant="primary")
                         with gr.Accordion("More options", open=False):
                             with gr.Row():
+                              design_seed = gr.Number(label="Seed (-1 for random)", value=-1, precision=0)
                               design_rem_silence = gr.Checkbox(label="Remove Silence", value=False)
                               design_make_subs = gr.Checkbox(label="Generate Subtitles", value=False)
                         
@@ -390,7 +550,17 @@ def build_ui():
 
                 design_btn.click(
                     generate_voice_design, 
-                    inputs=[design_text, design_language, design_instruct, design_rem_silence, design_make_subs], 
+                    inputs=[
+                        design_text, 
+                        design_language, 
+                        design_gender,    
+                        design_age,       
+                        design_emotion,   
+                        design_instruct,
+                        design_seed,  
+                        design_rem_silence, 
+                        design_make_subs
+                    ], 
                     outputs=[design_audio_out, design_status, d_srt1, d_srt2, d_srt3, d_srt4]
                 )
 
@@ -416,6 +586,7 @@ def build_ui():
                         clone_btn = gr.Button("Clone & Generate", variant="primary")
                         with gr.Accordion("More options", open=False):
                             with gr.Row():
+                              clone_seed = gr.Number(label="Seed (-1 for random)", value=-1, precision=0)
                               clone_rem_silence = gr.Checkbox(label="Remove Silence", value=False)
                               clone_make_subs = gr.Checkbox(label="Generate Subtitles", value=False)
 
@@ -438,7 +609,7 @@ def build_ui():
                 
                 clone_btn.click(
                     smart_generate_clone,
-                    inputs=[clone_ref_audio, clone_ref_text, clone_target_text, clone_language, clone_mode, clone_model_size, clone_rem_silence, clone_make_subs],
+                    inputs=[clone_ref_audio, clone_ref_text, clone_target_text, clone_language, clone_mode, clone_seed, clone_model_size, clone_rem_silence, clone_make_subs],
                     outputs=[clone_audio_out, clone_status, c_srt1, c_srt2, c_srt3, c_srt4]
                 )
 
@@ -448,15 +619,29 @@ def build_ui():
                     with gr.Column(scale=2):
                         tts_text = gr.Textbox(label="Text", lines=4,   placeholder="Enter the text you want to convert to speech...",
                             value="Hello! Welcome to Text-to-Speech system. This is a demo of our TTS capabilities.")
+                        
                         with gr.Row():
                             tts_language = gr.Dropdown(label="Language", choices=LANGUAGES, value="English")
                             tts_speaker = gr.Dropdown(label="Speaker", choices=SPEAKERS, value="Ryan")
-                        with gr.Row():
-                            tts_instruct = gr.Textbox(label="Style Instruction (Optional)", lines=2,placeholder="e.g., Speak in a cheerful and energetic tone")
-                            tts_model_size = gr.Dropdown(label="Size", choices=MODEL_SIZES, value="1.7B")
+
+                        # --- SECTOR BUILDER: Custom Voice ---
+                        gr.Markdown("### Style & Tone Builder (Optional)")
+                        
+                        # Usamos las claves del diccionario EMOTION_MAP
+                        tts_emotion = gr.Dropdown(label="Narrator Style / Emotion", choices=list(EMOTION_MAP.keys()), value="None")
+                        
+                        tts_instruct = gr.Textbox(label="Additional Instruction (Manual)", lines=2,
+                                                  placeholder="Add specific details (e.g., 'breathing heavily') or leave empty.",
+                                                  value="")
+                        # ------------------------------------
+
+                        tts_model_size = gr.Dropdown(label="Size", choices=MODEL_SIZES, value="1.7B")
+                        
                         tts_btn = gr.Button("Generate Speech", variant="primary")
+                        
                         with gr.Accordion("More options", open=False):
                             with gr.Row():
+                              tts_seed = gr.Number(label="Seed (-1 for random)", value=-1, precision=0)
                               tts_rem_silence = gr.Checkbox(label="Remove Silence", value=False)
                               tts_make_subs = gr.Checkbox(label="Generate Subtitles", value=False)
                             
@@ -476,7 +661,17 @@ def build_ui():
 
                 tts_btn.click(
                     generate_custom_voice, 
-                    inputs=[tts_text, tts_language, tts_speaker, tts_instruct, tts_model_size, tts_rem_silence, tts_make_subs], 
+                    inputs=[
+                        tts_text, 
+                        tts_language, 
+                        tts_speaker, 
+                        tts_emotion,   
+                        tts_instruct,
+                        tts_seed,  
+                        tts_model_size, 
+                        tts_rem_silence, 
+                        tts_make_subs
+                    ], 
                     outputs=[tts_audio_out, tts_status, t_srt1, t_srt2, t_srt3, t_srt4]
                 )
             # --- Tab 4: About ---
@@ -512,14 +707,8 @@ def build_ui():
                 </ul>
                 """)
 
-             
+              
     return demo
-
-# if __name__ == "__main__":
-#     demo = build_ui()
-#     demo.launch(share=True, debug=True)
-
-
 
 import click
 @click.command()
@@ -531,4 +720,4 @@ def main(share,debug):
     demo.queue().launch(share=share,debug=debug)
 
 if __name__ == "__main__":
-    main()    
+    main()
