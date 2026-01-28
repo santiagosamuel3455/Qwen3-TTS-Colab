@@ -14,6 +14,8 @@ from huggingface_hub import snapshot_download
 from hf_downloader import download_model
 import gc 
 import random 
+import time
+from datetime import datetime
 from huggingface_hub import login
 
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -33,7 +35,6 @@ SPEAKERS = [
 ]
 LANGUAGES = ["Auto", "Chinese", "English", "Japanese", "Korean", "French", "German", "Spanish", "Portuguese", "Russian"]
 
-# Listas para el Constructor de Prompts
 GENDER_OPTIONS = ["None", "Female", "Male"]
 
 AGE_OPTIONS = [
@@ -44,8 +45,6 @@ AGE_OPTIONS = [
 # --- DICCIONARIO MAESTRO DE EMOCIONES Y ESTILOS ---
 EMOTION_MAP = {
     "None": "",
-    
-    # --- BASIC EMOTIONS ---
     "Happy": "Speaking with a cheerful and upbeat tone, smiling voice",
     "Sad": "Speaking with a sorrowful and downcast tone, heavy with emotion",
     "Angry": "Speaking with a furious and aggressive tone, sharp and intense",
@@ -74,8 +73,6 @@ EMOTION_MAP = {
     "Panic": "Speaking with a frantic and breathless tone, high urgency",
     "Seductive": "Speaking with a smooth and alluring tone, low and captivating",
     "Warm": "Speaking with a friendly and inviting tone, kind and gentle",
-
-    # --- NARRATOR STYLES ---
     "Epic Narrator": "Deep and resonant voice, slow-paced rhythm for grandiose moments",
     "Intimate Narrator": "Close and whispered tone, as if sharing a secret",
     "Mysterious Narrator": "Low intonation with strategic pauses that generate intrigue",
@@ -101,10 +98,8 @@ EMOTION_MAP = {
 # --- Helper Functions ---
 
 def set_seed(seed):
-    """Sets the seed for reproducibility. Returns the seed used."""
     if seed == -1 or seed is None:
         seed = random.randint(0, 2**32 - 1)
-    
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -113,14 +108,12 @@ def set_seed(seed):
     return seed
 
 def get_model_path(model_type: str, model_size: str) -> str:
-    """Get model path based on type and size."""
     try:
       return snapshot_download(f"Qwen/Qwen3-TTS-12Hz-{model_size}-{model_type}")
     except Exception as e:
       return download_model(f"Qwen/Qwen3-TTS-12Hz-{model_size}-{model_type}", download_folder="./qwen_tts_model", redownload= False)
 
 def clear_other_models(keep_key=None):
-    """Delete all loaded models except the current one."""
     global loaded_models
     keys_to_delete = [k for k in loaded_models if k != keep_key]
     for k in keys_to_delete:
@@ -135,7 +128,6 @@ def clear_other_models(keep_key=None):
         torch.cuda.empty_cache()
 
 def get_model(model_type: str, model_size: str):
-    """Load model and clear others to avoid OOM in Colab."""
     global loaded_models
     key = (model_type, model_size)
     if key in loaded_models:
@@ -152,7 +144,6 @@ def get_model(model_type: str, model_size: str):
     return model
 
 def _normalize_audio(wav, eps=1e-12, clip=True):
-    """Normalize audio to float32 in [-1, 1] range."""
     x = np.asarray(wav)
     if np.issubdtype(x.dtype, np.integer):
         info = np.iinfo(x.dtype)
@@ -175,7 +166,6 @@ def _normalize_audio(wav, eps=1e-12, clip=True):
     return y
 
 def _audio_to_tuple(audio):
-    """Convert Gradio audio input to (wav, sr) tuple."""
     if audio is None: return None
     if isinstance(audio, str):
         try:
@@ -196,7 +186,6 @@ def _audio_to_tuple(audio):
     return None
 
 def transcribe_reference(audio_path, mode_input, language="English"):
-    """Uses subtitle_maker to extract text from the reference audio."""
     should_run = False
     if isinstance(mode_input, bool): should_run = mode_input
     elif isinstance(mode_input, str) and "High-Quality" in mode_input: should_run = True
@@ -213,10 +202,8 @@ def transcribe_reference(audio_path, mode_input, language="English"):
         print(f"Transcription Error: {e}")
         return f"Error during transcription: {str(e)}"
 
-# --- Audio Processing Utils (Disk Based) ---
-
+# --- Audio Processing Utils ---
 def remove_silence_function(file_path, minimum_silence=100):
-    """Removes silence from an audio file using Pydub."""
     try:
         output_path = file_path.replace(".wav", "_no_silence.wav")
         sound = AudioSegment.from_wav(file_path)
@@ -234,13 +221,10 @@ def remove_silence_function(file_path, minimum_silence=100):
         return file_path
 
 def process_audio_output(audio_path, make_subtitle, remove_silence, language="Auto"):
-    """Handles Silence Removal and Subtitle Generation."""
-    # 1. Remove Silence
     final_audio_path = audio_path
     if remove_silence:
         final_audio_path = remove_silence_function(audio_path)
      
-    # 2. Generate Subtitles
     default_srt, custom_srt, word_srt, shorts_srt = None, None, None, None
     if make_subtitle:
         try:
@@ -255,16 +239,9 @@ def process_audio_output(audio_path, make_subtitle, remove_silence, language="Au
     return final_audio_path, default_srt, custom_srt, word_srt, shorts_srt
 
 def stitch_chunk_files(chunk_files,output_filename):
-    """
-    Takes a list of file paths.
-    Stitches them into one file.
-    Deletes the temporary chunk files.
-    """
     if not chunk_files:
         return None
-
     combined_audio = AudioSegment.empty()
-     
     print(f"Stitching {len(chunk_files)} audio files...")
     for f in chunk_files:
         try:
@@ -272,49 +249,50 @@ def stitch_chunk_files(chunk_files,output_filename):
             combined_audio += segment
         except Exception as e:
             print(f"Error appending chunk {f}: {e}")
-
-    # output_filename = f"final_output_{os.getpid()}.wav"
     combined_audio.export(output_filename, format="wav")
-     
-    # Clean up temp files
     for f in chunk_files:
         try:
-            if os.path.exists(f):
-                os.remove(f)
-        except Exception as e:
-            print(f"Warning: Could not delete temp file {f}: {e}")
-             
+            if os.path.exists(f): os.remove(f)
+        except Exception as e: pass
     return output_filename
 
-# --- Generators (Memory Optimized) ---
+# ==========================================
+# REAL-TIME LOGGING UTILS
+# ==========================================
+def log_msg(buffer, msg):
+    """Adds timestamped message to buffer and prints to console."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    new_line = f"[{timestamp}] {msg}"
+    print(new_line) # Print to Colab console
+    return buffer + new_line + "\n"
+
+# --- Generators with Real-Time Logging ---
 
 def generate_voice_design(text, language, gender, age, emotion_key, manual_desc, seed, remove_silence, make_subs):
-    """Generates voice using specific format: Voice: X, Gender: Y, Age: Z"""
-    if not text or not text.strip(): return None, "Error: Text is required.", None, None, None, None
-    
-    # Set Seed
-    actual_seed = set_seed(int(seed))
+    log_buffer = ""
+    log_buffer = log_msg(log_buffer, "🚀 SYSTEM INITIATED: Voice Design Mode")
+    yield None, log_buffer, None, None, None, None
 
-    # --- Prompt Construction ---
-    prompt_parts = []
+    if not text or not text.strip(): 
+        log_buffer = log_msg(log_buffer, "❌ ERROR: Input text is empty.")
+        yield None, log_buffer, None, None, None, None
+        return
     
-    # 1. Voice: [Name] [Description]
+    actual_seed = set_seed(int(seed))
+    log_buffer = log_msg(log_buffer, f"🎲 Seed Locked: {actual_seed}")
+    yield None, log_buffer, None, None, None, None
+
+    # Prompt Construction
+    prompt_parts = []
     if emotion_key and emotion_key != "None":
         narrator_desc = EMOTION_MAP.get(emotion_key, "")
         prompt_parts.append(f"Voice: {emotion_key} {narrator_desc}")
 
-    # 2. Gender: [Value]
-    if gender and gender != "None":
-        prompt_parts.append(f"Gender: {gender}")
+    if gender and gender != "None": prompt_parts.append(f"Gender: {gender}")
+    if age and age != "None": prompt_parts.append(f"Age: {age}")
 
-    # 3. Age: [Value]
-    if age and age != "None":
-        prompt_parts.append(f"Age: {age}")
-
-    # Join with ", "
     auto_prompt = ", ".join(prompt_parts)
     
-    # 4. Combine with Manual Description
     full_prompt = ""
     if auto_prompt and manual_desc and manual_desc.strip():
         full_prompt = f"{auto_prompt}. {manual_desc}"
@@ -323,20 +301,27 @@ def generate_voice_design(text, language, gender, age, emotion_key, manual_desc,
     elif manual_desc:
         full_prompt = manual_desc
     else:
-         return None, "Error: Please select options or enter a description.", None, None, None, None
+         log_buffer = log_msg(log_buffer, "❌ ERROR: No voice description attributes selected.")
+         yield None, log_buffer, None, None, None, None
+         return
 
-    print(f"Generated Prompt: {full_prompt} | Seed: {actual_seed}")
+    log_buffer = log_msg(log_buffer, f"📝 Prompt Constructed: {full_prompt}")
+    log_buffer = log_msg(log_buffer, "⚙️ Loading Neural Model: VoiceDesign 1.7B...")
+    yield None, log_buffer, None, None, None, None
 
     try:
-        # Chunking
         text_chunks, tts_filename = text_chunk(text, language, char_limit=280)
-        print(f"Processing {len(text_chunks)} chunks...")
-        
         chunk_files = []
         tts = get_model("VoiceDesign", "1.7B")
+        
+        total_chunks = len(text_chunks)
+        log_buffer = log_msg(log_buffer, f"📊 Text Analysis: Split into {total_chunks} chunk(s).")
+        yield None, log_buffer, None, None, None, None
 
-        # Generate Loop
         for i, chunk in enumerate(text_chunks):
+            log_buffer = log_msg(log_buffer, f"▶️ Generating Chunk {i+1}/{total_chunks}...")
+            yield None, log_buffer, None, None, None, None
+
             wavs, sr = tts.generate_voice_design(
                 text=chunk.strip(),
                 language=language,
@@ -344,8 +329,6 @@ def generate_voice_design(text, language, gender, age, emotion_key, manual_desc,
                 non_streaming_mode=True,
                 max_new_tokens=2048,
             )
-            
-            # Save to disk
             temp_filename = f"temp_chunk_{i}_{os.getpid()}.wav"
             sf.write(temp_filename, wavs[0], sr)
             chunk_files.append(temp_filename)
@@ -354,38 +337,44 @@ def generate_voice_design(text, language, gender, age, emotion_key, manual_desc,
             torch.cuda.empty_cache()
             gc.collect()
         
-        # Stitch
+        log_buffer = log_msg(log_buffer, "🧵 Audio Stitching: Merging segments...")
+        yield None, log_buffer, None, None, None, None
+
         stitched_file = stitch_chunk_files(chunk_files,tts_filename)
         
-        # Post-Process
+        log_buffer = log_msg(log_buffer, "✨ Post-Processing: Applying silence removal & subtitles...")
+        yield None, log_buffer, None, None, None, None
+
         final_audio, srt1, srt2, srt3, srt4 = process_audio_output(stitched_file, make_subs, remove_silence, language)
         
-        return final_audio, f"Success! Seed: {actual_seed}", srt1, srt2, srt3, srt4
+        log_buffer = log_msg(log_buffer, "✅ PROCESS COMPLETE: Audio ready.")
+        yield final_audio, log_buffer, srt1, srt2, srt3, srt4
 
     except Exception as e:
-        return None, f"Error: {e}", None, None, None, None
+        log_buffer = log_msg(log_buffer, f"❌ CRITICAL ERROR: {str(e)}")
+        yield None, log_buffer, None, None, None, None
 
 def generate_custom_voice(text, language, speaker, emotion_key, manual_desc, seed, model_size, remove_silence, make_subs):
-    """
-    Generates custom voice using speaker ID + Title + Description.
-    """
-    if not text or not text.strip(): return None, "Error: Text is required.", None, None, None, None
+    log_buffer = ""
+    log_buffer = log_msg(log_buffer, "🚀 SYSTEM INITIATED: Custom Voice Mode")
+    yield None, log_buffer, None, None, None, None
+
+    if not text or not text.strip(): 
+        log_buffer = log_msg(log_buffer, "❌ ERROR: Input text is required.")
+        yield None, log_buffer, None, None, None, None
+        return
     
-    # Set Seed
     actual_seed = set_seed(int(seed))
+    log_buffer = log_msg(log_buffer, f"🎲 Seed Locked: {actual_seed}")
+    yield None, log_buffer, None, None, None, None
     
-    # --- Prompt Construction (Instruct) ---
     prompt_parts = []
-    
-    # 1. Voice: [Name] [Description]
     if emotion_key and emotion_key != "None":
         narrator_desc = EMOTION_MAP.get(emotion_key, "")
         prompt_parts.append(f"Voice: {emotion_key} {narrator_desc}")
 
-    # Join
     auto_prompt = ", ".join(prompt_parts)
     
-    # 3. Combine with Manual
     full_instruct = ""
     if auto_prompt and manual_desc and manual_desc.strip():
         full_instruct = f"{auto_prompt}. {manual_desc}"
@@ -394,18 +383,27 @@ def generate_custom_voice(text, language, speaker, emotion_key, manual_desc, see
     elif manual_desc:
         full_instruct = manual_desc
     
-    # If empty, use None so the model defaults to the speaker's style
     final_instruct = full_instruct.strip() if full_instruct else None
     
-    print(f"Custom Voice Instruct: {final_instruct} | Seed: {actual_seed}") 
+    log_buffer = log_msg(log_buffer, f"🗣️ Speaker ID: {speaker}")
+    log_buffer = log_msg(log_buffer, f"🎭 Style Instruction: {final_instruct or 'Default'}")
+    log_buffer = log_msg(log_buffer, f"⚙️ Loading Model: CustomVoice {model_size}...")
+    yield None, log_buffer, None, None, None, None
 
     try:
         text_chunks, tts_filename = text_chunk(text, language, char_limit=280)
         chunk_files = []
         tts = get_model("CustomVoice", model_size)
         formatted_speaker = speaker.lower().replace(" ", "_")
+        
+        total_chunks = len(text_chunks)
+        log_buffer = log_msg(log_buffer, f"📊 Processing: {total_chunks} chunk(s) detected.")
+        yield None, log_buffer, None, None, None, None
 
         for i, chunk in enumerate(text_chunks):
+            log_buffer = log_msg(log_buffer, f"▶️ Generating Chunk {i+1}/{total_chunks}...")
+            yield None, log_buffer, None, None, None, None
+
             wavs, sr = tts.generate_custom_voice(
                 text=chunk.strip(),
                 language=language,
@@ -414,54 +412,84 @@ def generate_custom_voice(text, language, speaker, emotion_key, manual_desc, see
                 non_streaming_mode=True,
                 max_new_tokens=2048,
             )
-            # Save to disk
             temp_filename = f"temp_custom_{i}_{os.getpid()}.wav"
             sf.write(temp_filename, wavs[0], sr)
             chunk_files.append(temp_filename)
-             
             del wavs
             torch.cuda.empty_cache()
             gc.collect()
              
+        log_buffer = log_msg(log_buffer, "🧵 Finalizing: Stitching audio segments...")
+        yield None, log_buffer, None, None, None, None
+
         stitched_file = stitch_chunk_files(chunk_files,tts_filename)
         final_audio, srt1, srt2, srt3, srt4 = process_audio_output(stitched_file, make_subs, remove_silence, language)
-        return final_audio, f"Success! Speaker: {speaker} | Seed: {actual_seed}", srt1, srt2, srt3, srt4
+        
+        log_buffer = log_msg(log_buffer, "✅ PROCESS COMPLETE: Audio ready.")
+        yield final_audio, log_buffer, srt1, srt2, srt3, srt4
 
     except Exception as e:
-        return None, f"Error: {e}", None, None, None, None
+        log_buffer = log_msg(log_buffer, f"❌ CRITICAL ERROR: {str(e)}")
+        yield None, log_buffer, None, None, None, None
 
 def smart_generate_clone(ref_audio, ref_text, target_text, language, mode, seed, model_size, remove_silence, make_subs):
-    if not target_text or not target_text.strip(): return None, "Error: Target text is required.", None, None, None, None
-    if not ref_audio: return None, "Error: Ref audio required.", None, None, None, None
+    log_buffer = ""
+    log_buffer = log_msg(log_buffer, "🚀 CLONING SEQUENCE INITIATED...")
+    yield None, log_buffer, None, None, None, None
 
-    # Set Seed
+    if not target_text or not target_text.strip(): 
+        log_buffer = log_msg(log_buffer, "❌ Error: Target text required.")
+        yield None, log_buffer, None, None, None, None
+        return
+    if not ref_audio: 
+        log_buffer = log_msg(log_buffer, "❌ Error: Reference audio required.")
+        yield None, log_buffer, None, None, None, None
+        return
+
     actual_seed = set_seed(int(seed))
+    log_buffer = log_msg(log_buffer, f"🎲 Seed: {actual_seed}")
+    yield None, log_buffer, None, None, None, None
 
-    # 1. Mode & Transcript Logic
     use_xvector_only = ("Fast" in mode)
     final_ref_text = ref_text
     audio_tuple = _audio_to_tuple(ref_audio)
 
     if not use_xvector_only:
         if not final_ref_text or not final_ref_text.strip():
-            print("Auto-transcribing reference...")
+            log_buffer = log_msg(log_buffer, "🎙️ Auto-transcribing reference audio (Whisper)...")
+            yield None, log_buffer, None, None, None, None
             try:
                 final_ref_text = transcribe_reference(ref_audio, True, language)
                 if not final_ref_text or "Error" in final_ref_text:
-                      return None, f"Transcription failed: {final_ref_text}", None, None, None, None
+                      log_buffer = log_msg(log_buffer, f"⚠️ Transcription failed: {final_ref_text}")
+                      yield None, log_buffer, None, None, None, None
+                      return
+                log_buffer = log_msg(log_buffer, f"📝 Ref Text Detected: {final_ref_text[:50]}...")
+                yield None, log_buffer, None, None, None, None
             except Exception as e:
-                return None, f"Transcribe Error: {e}", None, None, None, None
+                log_buffer = log_msg(log_buffer, f"❌ Transcribe Error: {e}")
+                yield None, log_buffer, None, None, None, None
     else:
         final_ref_text = None
+        log_buffer = log_msg(log_buffer, "⚡ Fast Mode: Skipping transcription.")
+        yield None, log_buffer, None, None, None, None
 
     try:
-        # 2. Chunk Target Text
+        log_buffer = log_msg(log_buffer, f"⚙️ Loading Model: Base {model_size}...")
+        yield None, log_buffer, None, None, None, None
+        
         text_chunks, tts_filename = text_chunk(target_text, language, char_limit=280)
         chunk_files = []
         tts = get_model("Base", model_size)
+        
+        total = len(text_chunks)
+        log_buffer = log_msg(log_buffer, f"📊 Cloning Task: {total} chunks queued.")
+        yield None, log_buffer, None, None, None, None
 
-        # 3. Generate Loop
         for i, chunk in enumerate(text_chunks):
+            log_buffer = log_msg(log_buffer, f"🧬 Cloning Chunk {i+1}/{total}...")
+            yield None, log_buffer, None, None, None, None
+
             wavs, sr = tts.generate_voice_clone(
                 text=chunk.strip(),
                 language=language,
@@ -470,22 +498,25 @@ def smart_generate_clone(ref_audio, ref_text, target_text, language, mode, seed,
                 x_vector_only_mode=use_xvector_only,
                 max_new_tokens=2048,
             )
-            # Save to disk
             temp_filename = f"temp_clone_{i}_{os.getpid()}.wav"
             sf.write(temp_filename, wavs[0], sr)
             chunk_files.append(temp_filename)
-
             del wavs
             torch.cuda.empty_cache()
             gc.collect()
 
-        # 4. Stitch & Process
+        log_buffer = log_msg(log_buffer, "🧵 Assembling final audio file...")
+        yield None, log_buffer, None, None, None, None
+
         stitched_file = stitch_chunk_files(chunk_files,tts_filename)
         final_audio, srt1, srt2, srt3, srt4 = process_audio_output(stitched_file, make_subs, remove_silence, language)
-        return final_audio, f"Success! Seed: {actual_seed}", srt1, srt2, srt3, srt4
+        
+        log_buffer = log_msg(log_buffer, "✅ CLONING COMPLETE: Audio ready.")
+        yield final_audio, log_buffer, srt1, srt2, srt3, srt4
 
     except Exception as e:
-        return None, f"Error: {e}", None, None, None, None
+        log_buffer = log_msg(log_buffer, f"❌ CRITICAL ERROR: {str(e)}")
+        yield None, log_buffer, None, None, None, None
 
 
 # --- UI Construction ---
@@ -494,113 +525,205 @@ def on_mode_change(mode):
     return gr.update(visible=("High-Quality" in mode))
 
 def build_ui():
-    theme = gr.themes.Soft(font=[gr.themes.GoogleFont("Source Sans Pro"), "Arial", "sans-serif"])
-    css = ".gradio-container {max-width: none !important;} .tab-content {padding: 20px;}"
+    # ==========================================
+    # CSS FUTURISTA & SOURCE SANS PRO (READABLE)
+    # ==========================================
+    futuristic_css = """
+    @import url('https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@400;600;700&family=Orbitron:wght@700&family=Roboto+Mono&display=swap');
 
-    with gr.Blocks(theme=theme, css=css, title="Qwen3-TTS Demo") as demo:
-        gr.HTML("""
-        <div style="text-align: center; margin: 20px auto; max-width: 800px;">
-            <h1 style="font-size: 2.5em; margin-bottom: 5px;">🎙️ Qwen3-TTS </h1>
-            <a href="https://colab.research.google.com/github/NeuralFalconYT/Qwen3-TTS-Colab/blob/main/Qwen3_TTS_Colab.ipynb" target="_blank" style="display: inline-block; padding: 10px 20px; background-color: #4285F4; color: white; border-radius: 6px; text-decoration: none; font-size: 1em;">🥳 Run on Google Colab</a>
-        </div>""")
+    :root {
+        --neon-cyan: #00f3ff;
+        --neon-pink: #ff00ff;
+        --dark-bg: #0a0a0f;
+        --panel-bg: rgba(20, 20, 35, 0.95);
+        --card-bg: #151520;
+    }
 
-        with gr.Tabs():
+    .gradio-container {
+        background-color: var(--dark-bg) !important;
+        background-image: radial-gradient(circle at 50% 50%, #1a1a2e 0%, #000000 100%);
+        font-family: 'Source Sans Pro', sans-serif !important;
+        color: var(--neon-cyan) !important;
+    }
+
+    #main-title h1 {
+        font-family: 'Orbitron', sans-serif !important;
+        text-transform: uppercase;
+        letter-spacing: 3px;
+        text-shadow: 0 0 10px var(--neon-cyan);
+        text-align: center;
+    }
+
+    .dark-panel, .tabs, .tabitem {
+        background-color: var(--panel-bg) !important;
+        border: 1px solid #333;
+        border-radius: 8px !important;
+    }
+
+    textarea, input[type="text"], .gr-dropdown, .gr-input, .gr-checkbox {
+        background-color: rgba(0,0,0,0.6) !important;
+        border: 1px solid #444 !important;
+        color: white !important;
+        font-family: 'Source Sans Pro', sans-serif !important;
+        font-size: 16px !important;
+    }
+
+    .generate-btn {
+        background: linear-gradient(90deg, var(--neon-cyan), #0055ff) !important;
+        border: none !important;
+        color: black !important;
+        font-weight: 700 !important;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        box-shadow: 0 0 15px var(--neon-cyan);
+        font-family: 'Orbitron', sans-serif !important;
+    }
+    .generate-btn:hover { transform: scale(1.02); }
+
+    .log-box textarea {
+        background-color: #050505 !important;
+        border: 1px solid var(--neon-pink) !important;
+        color: var(--neon-pink) !important;
+        font-family: 'Roboto Mono', monospace !important;
+        font-size: 0.9rem !important;
+    }
+    .group-header {
+        color: var(--neon-pink);
+        font-weight: bold;
+        margin-bottom: 5px;
+        text-transform: uppercase;
+        font-family: 'Orbitron', sans-serif !important;
+        font-size: 0.9rem;
+    }
+    
+    .yt-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: #ff00ff;
+        text-decoration: none;
+        border: 1px solid #ff00ff;
+        padding: 8px 20px;
+        border-radius: 5px;
+        font-family: 'Orbitron', sans-serif;
+        font-weight: bold;
+        transition: all 0.3s;
+        background: rgba(255, 0, 255, 0.05);
+    }
+    .yt-btn:hover {
+        background: #ff00ff;
+        color: #000;
+        box-shadow: 0 0 15px #ff00ff;
+    }
+    """
+    
+    # Theme Monochrome base
+    theme = gr.themes.Monochrome(
+        primary_hue="cyan", neutral_hue="slate", radius_size=gr.themes.sizes.radius_none
+    )
+
+    with gr.Blocks(theme=theme, css=futuristic_css, title="Qwen3-TTS Ultimate") as demo:
+        
+        # --- HEADER ---
+        with gr.Row(elem_id="main-title"):
+             gr.HTML("""
+             <div style="text-align: center; padding: 20px; background-color: #202030; border-radius: 10px; margin-bottom: 20px;">
+                <h1 style="font-size: 2.5em; color: #00f3ff; margin: 0;">⚡ Qwen3-TTS // ULTIMATE ⚡</h1>
+                <p style="font-size: 1em; color: #E0E0E0; margin: 10px 0; font-family: 'Source Sans Pro';">
+                    High-Fidelity Neural Speech Synthesis & Cloning
+                </p>
+                <br>
+                <a href="https://www.youtube.com/@IA.Sistema.de.Interes" target="_blank" class="yt-btn">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+                    IA Sistema de Interés
+                </a>
+             </div>
+             """)
+
+        with gr.Tabs(elem_classes="dark-panel"):
             # --- Tab 1: Voice Design ---
-            with gr.Tab("Voice Design"):
+            with gr.TabItem("✨ VOICE DESIGN"):
                 with gr.Row():
-                    with gr.Column(scale=2):
-                        design_text = gr.Textbox(label="Text to Synthesize", lines=4, value="It's in the top drawer... wait, it's empty? No way, that's impossible! I'm sure I put it there!",
-                                                 placeholder="Enter the text you want to convert to speech...")
+                    # Left Column: Inputs
+                    with gr.Column(scale=1, elem_classes="dark-panel"):
+                        gr.Markdown("### // INPUT CONFIG //", elem_classes="group-header")
+                        design_text = gr.Textbox(label="Text to Synthesize", lines=4, value="It's in the top drawer... wait, it's empty? No way, that's impossible!", placeholder="Enter text here...")
                         design_language = gr.Dropdown(label="Language", choices=LANGUAGES, value="Auto")
-                        
-                        # --- SECTOR BUILDER: Voice Design ---
-                        gr.Markdown("### Voice Characteristics (Optional Builder)")
+
+                        gr.Markdown("---")
+                        gr.Markdown("### // CHARACTER BUILDER //", elem_classes="group-header")
                         with gr.Row():
-                            design_gender = gr.Dropdown(label="Gender", choices=GENDER_OPTIONS, value="None")
-                            design_age = gr.Dropdown(label="Age", choices=AGE_OPTIONS, value="None")
+                            design_gender = gr.Dropdown(label="Gender", choices=GENDER_OPTIONS, value="None", scale=1)
+                            design_age = gr.Dropdown(label="Age", choices=AGE_OPTIONS, value="None", scale=1)
                         
-                        # Usamos las claves del diccionario EMOTION_MAP
                         design_emotion = gr.Dropdown(label="Narrator Style / Emotion", choices=list(EMOTION_MAP.keys()), value="None")
-                        
-                        design_instruct = gr.Textbox(label="Additional Description (Manual)", lines=2, 
-                                                     placeholder="Add specific details (e.g., 'breathing heavily', 'slight accent') or leave empty to use the dropdowns above.",
-                                                     value="")
-                        # ------------------------------------
+                        design_instruct = gr.Textbox(label="Manual Tweak (Optional)", lines=1, placeholder="e.g. 'breathing heavily'")
 
-                        design_btn = gr.Button("Generate with Voice Design", variant="primary")
-                        with gr.Accordion("More options", open=False):
+                        gr.Markdown("---")
+                        design_btn = gr.Button("► GENERATE AUDIO", elem_classes="generate-btn")
+                        
+                        with gr.Accordion("⚙️ SYSTEM PARAMETERS", open=False):
                             with gr.Row():
-                              design_seed = gr.Number(label="Seed (-1 for random)", value=-1, precision=0)
-                              design_rem_silence = gr.Checkbox(label="Remove Silence", value=False)
-                              design_make_subs = gr.Checkbox(label="Generate Subtitles", value=False)
-                        
-                        
+                                design_seed = gr.Number(label="Seed (-1 = Random)", value=-1, precision=0)
+                                design_rem_silence = gr.Checkbox(label="Remove Silence", value=False)
+                                design_make_subs = gr.Checkbox(label="Generate Subtitles", value=False)
 
-                    with gr.Column(scale=2):
-                        design_audio_out = gr.Audio(label="Generated Audio", type="filepath")
-                        design_status = gr.Textbox(label="Status", interactive=False)
+                    # Right Column: Outputs
+                    with gr.Column(scale=1, elem_classes="dark-panel"):
+                        gr.Markdown("### // OUTPUT TERMINAL //", elem_classes="group-header")
+                        design_audio_out = gr.Audio(label="Audio Waveform", type="filepath")
+                        design_status = gr.Textbox(label="System Log", interactive=False, elem_classes="log-box", lines=12)
                         
-                        with gr.Accordion("📝 Subtitles", open=False):
-                            with gr.Row():
-                                d_srt1 = gr.File(label="Original (Whisper)")
-                                d_srt2 = gr.File(label="Readable")
-                            with gr.Row():
+                        with gr.Accordion("📝 DATA STREAMS (SUBTITLES)", open=False):
+                             with gr.Row():
+                                d_srt1 = gr.File(label="SRT (Whisper)")
+                                d_srt2 = gr.File(label="Readable TXT")
+                             with gr.Row():
                                 d_srt3 = gr.File(label="Word-level")
-                                d_srt4 = gr.File(label="Shorts/Reels")
+                                d_srt4 = gr.File(label="Shorts JSON")
 
                 design_btn.click(
                     generate_voice_design, 
-                    inputs=[
-                        design_text, 
-                        design_language, 
-                        design_gender,    
-                        design_age,       
-                        design_emotion,   
-                        design_instruct,
-                        design_seed,  
-                        design_rem_silence, 
-                        design_make_subs
-                    ], 
+                    inputs=[design_text, design_language, design_gender, design_age, design_emotion, design_instruct, design_seed, design_rem_silence, design_make_subs], 
                     outputs=[design_audio_out, design_status, d_srt1, d_srt2, d_srt3, d_srt4]
                 )
 
             # --- Tab 2: Voice Clone ---
-            with gr.Tab("Voice Clone (Base)"):
+            with gr.TabItem("🧬 VOICE CLONE"):
                 with gr.Row():
-                    with gr.Column(scale=2):
-                        clone_target_text = gr.Textbox(label="Target Text", lines=3, placeholder="Enter the text you want the cloned voice to speak...")
-                        clone_ref_audio = gr.Audio(label="Reference Audio (Upload a voice sample to clone)", type="filepath")
+                    with gr.Column(scale=1, elem_classes="dark-panel"):
+                        gr.Markdown("### // TARGET //", elem_classes="group-header")
+                        clone_target_text = gr.Textbox(label="Text to Speak", lines=3, placeholder="Enter text...")
                         
+                        gr.Markdown("### // REFERENCE SAMPLE //", elem_classes="group-header")
+                        clone_ref_audio = gr.Audio(label="Upload Audio Ref", type="filepath")
+                        clone_ref_text = gr.Textbox(label="Ref Transcription (Auto)", lines=1)
+
                         with gr.Row():
-                            clone_language = gr.Dropdown(label="Language", choices=LANGUAGES, value="Auto",scale=1)
-                            clone_model_size = gr.Dropdown(label="Model Size", choices=MODEL_SIZES, value="1.7B",scale=1)
-                            clone_mode = gr.Dropdown(
-                                label="Mode",
-                                choices=["High-Quality (Audio + Transcript)", "Fast (Audio Only)"],
-                                value="High-Quality (Audio + Transcript)",
-                                interactive=True,
-                                scale=2
-                            )
+                            clone_language = gr.Dropdown(label="Language", choices=LANGUAGES, value="Auto")
+                            clone_model_size = gr.Dropdown(label="Model Size", choices=MODEL_SIZES, value="1.7B")
                         
-                        clone_ref_text = gr.Textbox(label="Reference Text", lines=2, visible=True)
-                        clone_btn = gr.Button("Clone & Generate", variant="primary")
-                        with gr.Accordion("More options", open=False):
-                            with gr.Row():
-                              clone_seed = gr.Number(label="Seed (-1 for random)", value=-1, precision=0)
-                              clone_rem_silence = gr.Checkbox(label="Remove Silence", value=False)
-                              clone_make_subs = gr.Checkbox(label="Generate Subtitles", value=False)
+                        clone_mode = gr.Dropdown(label="Processing Mode", choices=["High-Quality (Audio + Transcript)", "Fast (Audio Only)"], value="High-Quality (Audio + Transcript)")
+                        
+                        gr.Markdown("---")
+                        clone_btn = gr.Button("► INITIATE CLONING", elem_classes="generate-btn")
 
-                        
+                        with gr.Accordion("⚙️ SYSTEM PARAMETERS", open=False):
+                             with gr.Row():
+                                clone_seed = gr.Number(label="Seed (-1 = Random)", value=-1, precision=0)
+                                clone_rem_silence = gr.Checkbox(label="Remove Silence", value=False)
+                                clone_make_subs = gr.Checkbox(label="Generate Subtitles", value=False)
 
-                    with gr.Column(scale=2):
-                        clone_audio_out = gr.Audio(label="Generated Audio", type="filepath")
-                        clone_status = gr.Textbox(label="Status", interactive=False)
+                    with gr.Column(scale=1, elem_classes="dark-panel"):
+                        gr.Markdown("### // OUTPUT TERMINAL //", elem_classes="group-header")
+                        clone_audio_out = gr.Audio(label="Cloned Waveform", type="filepath")
+                        clone_status = gr.Textbox(label="System Log", interactive=False, elem_classes="log-box", lines=12)
                         
-                        with gr.Accordion("📝 Subtitles", open=False):
-                            with gr.Row():
+                        with gr.Accordion("📝 DATA STREAMS", open=False):
+                             with gr.Row():
                                 c_srt1 = gr.File(label="Original")
                                 c_srt2 = gr.File(label="Readable")
-                            with gr.Row():
+                             with gr.Row():
                                 c_srt3 = gr.File(label="Word-level")
                                 c_srt4 = gr.File(label="Shorts/Reels")
 
@@ -613,100 +736,50 @@ def build_ui():
                     outputs=[clone_audio_out, clone_status, c_srt1, c_srt2, c_srt3, c_srt4]
                 )
 
-            # --- Tab 3: TTS (CustomVoice) ---
-            with gr.Tab("TTS (CustomVoice)"):
+            # --- Tab 3: Preset Voices ---
+            with gr.TabItem("🗣️ PRESET VOICES"):
                 with gr.Row():
-                    with gr.Column(scale=2):
-                        tts_text = gr.Textbox(label="Text", lines=4,   placeholder="Enter the text you want to convert to speech...",
-                            value="Hello! Welcome to Text-to-Speech system. This is a demo of our TTS capabilities.")
+                    with gr.Column(scale=1, elem_classes="dark-panel"):
+                        gr.Markdown("### // INPUT CONFIG //", elem_classes="group-header")
+                        tts_text = gr.Textbox(label="Text to Synthesize", lines=4, value="Hello! This is a demo of our TTS capabilities.")
                         
                         with gr.Row():
                             tts_language = gr.Dropdown(label="Language", choices=LANGUAGES, value="English")
-                            tts_speaker = gr.Dropdown(label="Speaker", choices=SPEAKERS, value="Ryan")
+                            tts_speaker = gr.Dropdown(label="Speaker ID", choices=SPEAKERS, value="Ryan")
 
-                        # --- SECTOR BUILDER: Custom Voice ---
-                        gr.Markdown("### Style & Tone Builder (Optional)")
-                        
-                        # Usamos las claves del diccionario EMOTION_MAP
+                        gr.Markdown("### // STYLE MODIFIER //", elem_classes="group-header")
                         tts_emotion = gr.Dropdown(label="Narrator Style / Emotion", choices=list(EMOTION_MAP.keys()), value="None")
+                        tts_instruct = gr.Textbox(label="Manual Tweak (Optional)", lines=1)
                         
-                        tts_instruct = gr.Textbox(label="Additional Instruction (Manual)", lines=2,
-                                                  placeholder="Add specific details (e.g., 'breathing heavily') or leave empty.",
-                                                  value="")
-                        # ------------------------------------
+                        tts_model_size = gr.Dropdown(label="Size", choices=MODEL_SIZES, value="1.7B", visible=False)
 
-                        tts_model_size = gr.Dropdown(label="Size", choices=MODEL_SIZES, value="1.7B")
-                        
-                        tts_btn = gr.Button("Generate Speech", variant="primary")
-                        
-                        with gr.Accordion("More options", open=False):
-                            with gr.Row():
-                              tts_seed = gr.Number(label="Seed (-1 for random)", value=-1, precision=0)
-                              tts_rem_silence = gr.Checkbox(label="Remove Silence", value=False)
-                              tts_make_subs = gr.Checkbox(label="Generate Subtitles", value=False)
-                            
-                        
+                        gr.Markdown("---")
+                        tts_btn = gr.Button("► GENERATE SPEECH", elem_classes="generate-btn")
 
-                    with gr.Column(scale=2):
-                        tts_audio_out = gr.Audio(label="Generated Audio", type="filepath")
-                        tts_status = gr.Textbox(label="Status", interactive=False)
+                        with gr.Accordion("⚙️ SYSTEM PARAMETERS", open=False):
+                             with gr.Row():
+                                tts_seed = gr.Number(label="Seed (-1 = Random)", value=-1, precision=0)
+                                tts_rem_silence = gr.Checkbox(label="Remove Silence", value=False)
+                                tts_make_subs = gr.Checkbox(label="Generate Subtitles", value=False)
+
+                    with gr.Column(scale=1, elem_classes="dark-panel"):
+                        gr.Markdown("### // OUTPUT TERMINAL //", elem_classes="group-header")
+                        tts_audio_out = gr.Audio(label="Audio Waveform", type="filepath")
+                        tts_status = gr.Textbox(label="System Log", interactive=False, elem_classes="log-box", lines=12)
                         
-                        with gr.Accordion("📝 Subtitles", open=False):
-                            with gr.Row():
+                        with gr.Accordion("📝 DATA STREAMS", open=False):
+                             with gr.Row():
                                 t_srt1 = gr.File(label="Original")
                                 t_srt2 = gr.File(label="Readable")
-                            with gr.Row():
+                             with gr.Row():
                                 t_srt3 = gr.File(label="Word-level")
                                 t_srt4 = gr.File(label="Shorts/Reels")
 
                 tts_btn.click(
                     generate_custom_voice, 
-                    inputs=[
-                        tts_text, 
-                        tts_language, 
-                        tts_speaker, 
-                        tts_emotion,   
-                        tts_instruct,
-                        tts_seed,  
-                        tts_model_size, 
-                        tts_rem_silence, 
-                        tts_make_subs
-                    ], 
+                    inputs=[tts_text, tts_language, tts_speaker, tts_emotion, tts_instruct, tts_seed, tts_model_size, tts_rem_silence, tts_make_subs], 
                     outputs=[tts_audio_out, tts_status, t_srt1, t_srt2, t_srt3, t_srt4]
                 )
-            # --- Tab 4: About ---
-            with gr.Tab("About"):
-                gr.Markdown("""
-                # Qwen3-TTS 
-                A unified Text-to-Speech demo featuring three powerful modes:
-                - **Voice Design**: Create custom voices using natural language descriptions
-                - **Voice Clone (Base)**: Clone any voice from a reference audio
-                - **TTS (CustomVoice)**: Generate speech with predefined speakers and optional style instructions
-
-                Built with [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) by Alibaba Qwen Team.
-                """)
-
-                gr.HTML("""
-                <hr>
-                <p style="color: red; font-weight: bold; font-size: 16px;">
-                ⚠️ NOTE
-                </p>
-                <p>
-                This Gradio UI is not affiliated with the official Qwen3-TTS project and is based on the
-                official Qwen3-TTS demo UI:<br>
-                <a href="https://huggingface.co/spaces/Qwen/Qwen3-TTS" target="_blank">
-                https://huggingface.co/spaces/Qwen/Qwen3-TTS
-                </a>
-                </p>
-
-                <p><b>Additional features:</b></p>
-                <ul>
-                  <li>Automatic transcription support using faster-whisper-large-v3-turbo-ct2</li>
-                  <li>Long text input support</li>
-                  <li>Because we are using Whisper, subtitles are also added</li>
-                </ul>
-                """)
-
               
     return demo
 
@@ -716,8 +789,7 @@ import click
 @click.option("--share", is_flag=True, default=False, help="Enable sharing of the interface.")
 def main(share,debug):
     demo = build_ui()
-    # demo.launch(share=True, debug=True)
-    demo.queue().launch(share=share,debug=debug)
+    demo.queue().launch(share=share, debug=debug)
 
 if __name__ == "__main__":
     main()
