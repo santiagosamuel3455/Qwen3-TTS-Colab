@@ -36,7 +36,12 @@ MODEL_SIZES = ["0.6B", "1.7B"]
 SPEAKERS = [
     "Aiden", "Dylan", "Eric", "Ono_anna", "Ryan", "Serena", "Sohee", "Uncle_fu", "Vivian"
 ]
-LANGUAGES = ["Auto", "Chinese", "English", "Japanese", "Korean", "French", "German", "Spanish", "Portuguese", "Russian"]
+
+# Lista de idiomas soportados por el modelo para la generación
+LANGUAGES = [
+    "Auto", "Chinese", "English", "Japanese", "Korean", "French", "German", 
+    "Spanish", "Portuguese", "Russian"
+]
 
 GENDER_OPTIONS = ["None", "Female", "Male"]
 
@@ -44,6 +49,22 @@ AGE_OPTIONS = [
     "None", "Child", "Teenager", "Young Adult", "Adult", 
     "Middle-aged", "Elderly", "Old"
 ]
+
+# --- NUEVO: MAPEO DE CÓDIGOS A NOMBRES (Expandido) ---
+# Se han agregado DA, NO, SV, MS y otros comunes para cubrir la captura de pantalla.
+LANG_CODE_TO_NAME = {
+    "en": "English", "es": "Spanish", "fr": "French", "de": "German",
+    "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "pt": "Portuguese",
+    "ru": "Russian", "it": "Italian", "nl": "Dutch", "tr": "Turkish",
+    "pl": "Polish", "cs": "Czech", "ar": "Arabic", "hu": "Hungarian",
+    "fi": "Finnish", "vi": "Vietnamese", "uk": "Ukrainian", "el": "Greek",
+    "id": "Indonesian", "th": "Thai", "hi": "Hindi", 
+    # Agregados para corregir tu captura:
+    "da": "Danish", "no": "Norwegian", "sv": "Swedish", "ms": "Malay",
+    "bg": "Bulgarian", "ro": "Romanian", "sk": "Slovak", "sl": "Slovenian",
+    "hr": "Croatian", "lt": "Lithuanian", "lv": "Latvian", "et": "Estonian",
+    "he": "Hebrew", "fa": "Persian", "ur": "Urdu", "bn": "Bengali"
+}
 
 # --- CONFIGURACIÓN PARA MULTILENGUAJE ---
 VOICE_WAV_ROOT = "Voice TTS"
@@ -278,6 +299,10 @@ def generate_voice_design(text, language, gender, age, emotion_key, manual_desc,
     yield None, log_buffer, None, None, None, None
     if not text or not text.strip(): return
     actual_seed = set_seed(int(seed))
+    
+    log_buffer = log_msg(log_buffer, f"🎲 Seed Used: {actual_seed}")
+    yield None, log_buffer, None, None, None, None
+
     prompt_parts = []
     if emotion_key and emotion_key != "None": prompt_parts.append(f"Voice: {emotion_key} {EMOTION_MAP.get(emotion_key, '')}")
     if gender and gender != "None": prompt_parts.append(f"Gender: {gender}")
@@ -315,6 +340,9 @@ def generate_custom_voice(text, language, speaker, emotion_key, manual_desc, see
     if not text or not text.strip(): return
     actual_seed = set_seed(int(seed))
     
+    log_buffer = log_msg(log_buffer, f"🎲 Seed Used: {actual_seed}")
+    yield None, log_buffer, None, None, None, None
+
     prompt_parts = []
     if emotion_key and emotion_key != "None": prompt_parts.append(f"Voice: {emotion_key} {EMOTION_MAP.get(emotion_key, '')}")
     full_instruct = f"{', '.join(prompt_parts)}. {manual_desc}".strip(' ,.') if (prompt_parts or manual_desc) else None
@@ -351,6 +379,10 @@ def smart_generate_clone(ref_audio, ref_text, target_text, language, mode, seed,
     if not ref_audio: log_buffer = log_msg(log_buffer, "❌ Error: Reference audio required."); yield None, log_buffer, None, None, None, None; return
 
     actual_seed = set_seed(int(seed))
+    
+    log_buffer = log_msg(log_buffer, f"🎲 Seed Used: {actual_seed}")
+    yield None, log_buffer, None, None, None, None
+
     use_xvector_only = ("Fast" in mode)
     final_ref_text = ref_text
     
@@ -483,21 +515,44 @@ def build_ui():
                 def update_categories(gender):
                     cats = sorted(list(MULTI_DB.get(gender, {}).keys()))
                     return gr.update(choices=cats, value=cats[0] if cats else None)
+                
+                # --- FUNCIÓN CORREGIDA Y ROBUSTA ---
+                # Esta función ahora devuelve tuplas (Nombre Visible, Valor Interno)
+                # El "Valor Interno" es el código de la carpeta (ej: "es") que el sistema necesita.
                 def update_langs(gender, cat):
                     if not cat or cat not in MULTI_DB.get(gender, {}): return gr.update(choices=[])
-                    langs = sorted(list(MULTI_DB[gender][cat].keys()))
-                    return gr.update(choices=langs, value=langs[0] if langs else None)
+                    
+                    # Obtener los códigos de las carpetas (ej: "es", "en")
+                    folder_codes = sorted(list(MULTI_DB[gender][cat].keys()))
+                    
+                    display_choices = []
+                    for code in folder_codes:
+                        # Buscamos el nombre bonito en el diccionario global
+                        # Si no existe, usamos el código en mayúsculas como respaldo
+                        display_name = LANG_CODE_TO_NAME.get(code.lower(), code.upper())
+                        
+                        # CREAMOS LA TUPLA: (Lo que se ve, Lo que se envía al sistema)
+                        display_choices.append((display_name, code))
+                        
+                    # Importante: El valor por defecto debe ser el CÓDIGO (el segundo elemento)
+                    first_val = folder_codes[0] if folder_codes else None
+                    
+                    return gr.update(choices=display_choices, value=first_val)
+                # --------------------------------------------------------
+
                 def update_voices(gender, cat, lang):
+                    # 'lang' aquí recibirá el código (ej: "es") gracias a la tupla anterior
                     if not cat or not lang: return gr.update(choices=[])
                     try:
+                        # Buscamos en MULTI_DB usando el código
                         voices = sorted(list(MULTI_DB[gender][cat][lang].keys()))
                         return gr.update(choices=voices, value=voices[0] if voices else None)
                     except: return gr.update(choices=[])
                 
-                # --- NUEVA LOGICA ROBUSTA: Carga + Transcribe de forma segura ---
                 def load_voice_data_and_transcribe(gender, cat, lang, voice):
                     if not voice: return None, ""
                     try:
+                        # 'lang' es el código (ej: "es")
                         audio_path = MULTI_DB.get(gender, {}).get(cat, {}).get(lang, {}).get(voice)
                         if not audio_path or not os.path.exists(audio_path):
                             return None, "Error: Audio file not found in DB."
@@ -506,20 +561,17 @@ def build_ui():
                         text_content = ""
                         
                         if os.path.exists(txt_path):
-                            # print(f"📖 Found txt for: {voice}")
                             try:
                                 with open(txt_path, 'r', encoding='utf-8') as f:
                                     text_content = f.read().strip()
                             except: pass
                         
-                        # Intentar transcribir si no hay texto, pero NO fallar si la transcripción falla
                         if not text_content:
                             try:
-                                # print(f"🎙️ Auto-transcribing: {voice}...")
                                 text_content = transcribe_reference(audio_path, True, "Auto")
                             except Exception as e:
                                 print(f"Warning: Transcribe failed for {voice}: {e}")
-                                text_content = "" # Dejar vacío, el clonador manejará esto o fallará más adelante, pero el audio carga.
+                                text_content = "" 
                             
                         return audio_path, text_content
                     except Exception as e:
@@ -536,7 +588,6 @@ def build_ui():
                     lambda g, c: update_langs(g, c), inputs=[ml_gender, ml_category], outputs=ml_lang_filter
                 )
 
-                # BOTON USA COMPONENTES CARGADOS - CORREGIDO EL MAPEO DE SALIDA
                 ml_btn.click(
                     generate_multilang_preset,
                     inputs=[ml_target_text, ml_ref_audio, ml_ref_text, ml_gen_lang, ml_seed, ml_model_size, ml_silence, ml_subs],
