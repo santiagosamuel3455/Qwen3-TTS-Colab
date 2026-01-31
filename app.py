@@ -76,7 +76,7 @@ MULTI_DB = {"Female": {}, "Male": {}, "Other": {}}
 def scan_multilang_voices():
     """Escanea la carpeta Voice TTS y organiza por Genero -> Categoria -> Idioma usando rutas absolutas."""
     global MULTI_DB
-    MULTI_DB = {"Female": {}, "Male": {}, "Other": {}}
+    MULTI_DB = {"Female": {}, "Male": {}
     
     abs_root = os.path.abspath(VOICE_WAV_ROOT)
     
