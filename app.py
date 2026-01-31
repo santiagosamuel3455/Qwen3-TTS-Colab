@@ -481,7 +481,7 @@ def build_ui():
                     with gr.Column(scale=1, elem_classes="dark-panel"):
                         gr.Markdown("### // LIBRARY SELECTION //", elem_classes="group-header")
                         with gr.Row():
-                            ml_gender = gr.Dropdown(label="1. Gender", choices=["Female", "Male", "Other"], value="Female")
+                            ml_gender = gr.Dropdown(label="1. Gender", choices=["Female", "Male"], value="Female")
                             ml_category = gr.Dropdown(label="2. Category", choices=[], interactive=True)
                         with gr.Row():
                             ml_lang_filter = gr.Dropdown(label="3. Voice Language", choices=[], interactive=True)
