@@ -25,7 +25,7 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 if HF_TOKEN:
     login(token=HF_TOKEN)
 else:
-  HF_TOKEN=None
+    HF_TOKEN=None
 
 # Global model holders
 loaded_models = {}
@@ -51,7 +51,6 @@ AGE_OPTIONS = [
 ]
 
 # --- NUEVO: MAPEO DE CÓDIGOS A NOMBRES (Expandido) ---
-# Se han agregado DA, NO, SV, MS y otros comunes para cubrir la captura de pantalla.
 LANG_CODE_TO_NAME = {
     "en": "English", "es": "Spanish", "fr": "French", "de": "German",
     "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "pt": "Portuguese",
@@ -59,7 +58,6 @@ LANG_CODE_TO_NAME = {
     "pl": "Polish", "cs": "Czech", "ar": "Arabic", "hu": "Hungarian",
     "fi": "Finnish", "vi": "Vietnamese", "uk": "Ukrainian", "el": "Greek",
     "id": "Indonesian", "th": "Thai", "hi": "Hindi", 
-    # Agregados para corregir tu captura:
     "da": "Danish", "no": "Norwegian", "sv": "Swedish", "ms": "Malay",
     "bg": "Bulgarian", "ro": "Romanian", "sk": "Slovak", "sl": "Slovenian",
     "hr": "Croatian", "lt": "Lithuanian", "lv": "Latvian", "et": "Estonian",
@@ -198,7 +196,6 @@ def _audio_to_tuple(audio):
         
         try:
             # PASO 1: Conversión forzada con Pydub (MP3/M4A -> WAV 16kHz Mono)
-            # Esto elimina problemas de codecs que causan ruido estático.
             audio_segment = AudioSegment.from_file(path_to_load)
             audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
             
@@ -214,10 +211,6 @@ def _audio_to_tuple(audio):
             # Limpieza
             try: os.remove(temp_path)
             except: pass
-            
-            # Debug
-            amp = np.max(np.abs(wav))
-            # print(f"🔊 Audio Processed ({os.path.basename(path_to_load)}): Amp={amp:.4f}, SR={sr}")
             
             return wav, int(sr)
             
@@ -319,6 +312,9 @@ def generate_voice_design(text, language, gender, age, emotion_key, manual_desc,
         tts = get_model("VoiceDesign", "1.7B")
         
         for i, chunk in enumerate(text_chunks):
+            # --- CORRECCION: REINICIAR SEED PARA CADA CHUNK ---
+            set_seed(actual_seed)
+            # --------------------------------------------------
             log_buffer = log_msg(log_buffer, f"▶️ Generating Chunk {i+1}/{len(text_chunks)}...")
             yield None, log_buffer, None, None, None, None
             wavs, sr = tts.generate_voice_design(text=chunk.strip(), language=language, instruct=full_prompt.strip(), non_streaming_mode=True, max_new_tokens=2048)
@@ -356,6 +352,9 @@ def generate_custom_voice(text, language, speaker, emotion_key, manual_desc, see
         tts = get_model("CustomVoice", model_size)
         
         for i, chunk in enumerate(text_chunks):
+            # --- CORRECCION: REINICIAR SEED PARA CADA CHUNK ---
+            set_seed(actual_seed)
+            # --------------------------------------------------
             log_buffer = log_msg(log_buffer, f"▶️ Generating Chunk {i+1}/{len(text_chunks)}...")
             yield None, log_buffer, None, None, None, None
             wavs, sr = tts.generate_custom_voice(text=chunk.strip(), language=language, speaker=speaker.lower().replace(" ", "_"), instruct=full_instruct, non_streaming_mode=True, max_new_tokens=2048)
@@ -419,6 +418,9 @@ def smart_generate_clone(ref_audio, ref_text, target_text, language, mode, seed,
         tts = get_model("Base", model_size)
         
         for i, chunk in enumerate(text_chunks):
+            # --- CORRECCION: REINICIAR SEED PARA CADA CHUNK ---
+            set_seed(actual_seed)
+            # --------------------------------------------------
             log_buffer = log_msg(log_buffer, f"🧬 Cloning Chunk {i+1}/{len(text_chunks)}...")
             yield None, log_buffer, None, None, None, None
             
